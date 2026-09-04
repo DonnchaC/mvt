@@ -76,21 +76,31 @@ class CmdCheckIOCS(Command):
                     iocs_module.__name__,
                 )
 
-                m = iocs_module.from_json(
-                    file_path, log=get_module_logger(iocs_module)
-                )
-                if not m:
-                    log.warning("No result from this module, skipping it")
-                    continue
+                module_log = get_module_logger(iocs_module)
 
-                if self.iocs.total_ioc_count > 0:
-                    m.indicators = self.iocs
-                    m.indicators.log = m.log
-
+                # One unreadable results file, or one which does not hold what
+                # its module expects, must not abort the check of every other
+                # file, just as a failing module does not abort a normal run.
                 try:
+                    m = iocs_module.from_json(file_path, log=module_log)
+                    if not m:
+                        log.warning("No result from this module, skipping it")
+                        continue
+
+                    if self.iocs.total_ioc_count > 0:
+                        m.indicators = self.iocs
+                        m.indicators.log = m.log
+
                     exec_or_profile("m.check_indicators()", globals(), locals())
                 except NotImplementedError:
                     continue
+                except Exception as exc:
+                    module_log.exception(
+                        'Error when checking the results of module %s stored in "%s": %s',
+                        iocs_module.__name__,
+                        file_name,
+                        exc,
+                    )
                 else:
                     total_detections += len(m.alertstore.alerts)
 
