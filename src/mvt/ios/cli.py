@@ -1,0 +1,544 @@
+# Mobile Verification Toolkit (MVT)
+# Copyright (c) 2021-2023 The MVT Authors.
+# Use of this software is governed by the MVT License 1.1 that can be found at
+#   https://license.mvt.re/1.1/
+
+import json
+import logging
+import os
+
+import click
+from mvt.common.cli_plugins import (
+    IOS_CLI_PLUGIN_GROUP,
+    MVT_IOS_CUSTOM_COMMANDS_ENV,
+    load_cli_commands_option,
+    register_cli_plugins,
+)
+from mvt.common.options import MutuallyExclusiveOption
+from mvt.common.utils import (
+    generate_hashes_from_path,
+    init_logging,
+    set_verbose_logging,
+)
+from mvt.common.help import (
+    HELP_MSG_VERSION,
+    HELP_MSG_DECRYPT_BACKUP,
+    HELP_MSG_BACKUP_DESTINATION,
+    HELP_MSG_DECRYPT_JOBS,
+    HELP_MSG_IOS_BACKUP_PASSWORD,
+    HELP_MSG_BACKUP_KEYFILE,
+    HELP_MSG_HASHES,
+    HELP_MSG_EXTRACT_KEY,
+    HELP_MSG_IOC,
+    HELP_MSG_OUTPUT,
+    HELP_MSG_FAST,
+    HELP_MSG_LIST_MODULES,
+    HELP_MSG_LOAD_MODULE,
+    HELP_MSG_MODULE,
+    HELP_MSG_VERBOSE,
+    HELP_MSG_VERBOSE_COMMAND,
+    HELP_MSG_CHECK_FS,
+    HELP_MSG_CHECK_IOCS,
+    HELP_MSG_STIX2,
+    HELP_MSG_CHECK_IOS_BACKUP,
+    HELP_MSG_CHECK_SYSDIAGNOSE,
+    HELP_MSG_DISABLE_UPDATE_CHECK,
+    HELP_MSG_DISABLE_INDICATOR_UPDATE_CHECK,
+)
+from mvt.common.password import prompt_password
+from .decrypt_config import (
+    DEFAULT_DECRYPT_WORKERS,
+    MAX_DECRYPT_WORKERS,
+)
+
+# The commands import what they run only when they are invoked. This module is
+# imported at every start of mvt-ios, including by shell completion on every
+# keystroke, so importing it must do no more than build the command tree: the
+# forensic modules, the backup decryption and the update checks stay out of it.
+
+init_logging()
+log = logging.getLogger("mvt")
+
+# Set this environment variable to a password if needed.
+MVT_IOS_BACKUP_PASSWORD = "MVT_IOS_BACKUP_PASSWORD"
+CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
+
+
+def _get_disable_flags(ctx):
+    """Helper function to safely get disable flags from context."""
+    if ctx.obj is None:
+        return False, False
+    return (
+        ctx.obj.get("disable_version_check", False),
+        ctx.obj.get("disable_indicator_check", False),
+    )
+
+
+def _get_verbose(ctx):
+    """Return whether --verbose was passed to the CLI itself."""
+    return bool(ctx.obj and ctx.obj.get("verbose", False))
+
+
+def _load_custom_modules(load_module):
+    from mvt.common.module_loader import CustomModuleLoadError, load_custom_modules
+
+    try:
+        return load_custom_modules(load_module)
+    except CustomModuleLoadError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+# ==============================================================================
+# Main
+# ==============================================================================
+@click.group(invoke_without_command=False)
+@load_cli_commands_option
+@click.option(
+    "--disable-update-check", is_flag=True, help=HELP_MSG_DISABLE_UPDATE_CHECK
+)
+@click.option(
+    "--disable-indicator-update-check",
+    is_flag=True,
+    help=HELP_MSG_DISABLE_INDICATOR_UPDATE_CHECK,
+)
+@click.option("--verbose", "-v", is_flag=True, help=HELP_MSG_VERBOSE)
+@click.pass_context
+def cli(ctx, disable_update_check, disable_indicator_update_check, verbose):
+    ctx.ensure_object(dict)
+    ctx.obj["disable_version_check"] = disable_update_check
+    ctx.obj["disable_indicator_check"] = disable_indicator_update_check
+    ctx.obj["verbose"] = verbose
+    set_verbose_logging(verbose)
+
+    from mvt.common.logo import logo
+
+    logo(
+        disable_version_check=disable_update_check,
+        disable_indicator_check=disable_indicator_update_check,
+    )
+
+
+# ==============================================================================
+# Command: version
+# ==============================================================================
+@cli.command("version", context_settings=CONTEXT_SETTINGS, help=HELP_MSG_VERSION)
+def version():
+    return
+
+
+# ==============================================================================
+# Command: decrypt-backup
+# ==============================================================================
+@cli.command(
+    "decrypt-backup", context_settings=CONTEXT_SETTINGS, help=HELP_MSG_DECRYPT_BACKUP
+)
+@click.option("--destination", "-d", required=True, help=HELP_MSG_BACKUP_DESTINATION)
+@click.option(
+    "--jobs",
+    type=click.IntRange(1, MAX_DECRYPT_WORKERS),
+    default=DEFAULT_DECRYPT_WORKERS,
+    show_default=True,
+    help=HELP_MSG_DECRYPT_JOBS,
+)
+@click.option(
+    "--password",
+    "-p",
+    cls=MutuallyExclusiveOption,
+    mutually_exclusive=["key_file"],
+    help=HELP_MSG_IOS_BACKUP_PASSWORD,
+)
+@click.option(
+    "--key-file",
+    "-k",
+    cls=MutuallyExclusiveOption,
+    type=click.Path(exists=True),
+    mutually_exclusive=["password"],
+    help=HELP_MSG_BACKUP_KEYFILE,
+)
+@click.option("--hashes", "-H", is_flag=True, help=HELP_MSG_HASHES)
+@click.argument("BACKUP_PATH", type=click.Path(exists=True))
+@click.pass_context
+def decrypt_backup(ctx, destination, jobs, password, key_file, hashes, backup_path):
+    from .decrypt import DecryptBackup
+
+    backup = DecryptBackup(backup_path, destination, max_workers=jobs)
+
+    if key_file:
+        if MVT_IOS_BACKUP_PASSWORD in os.environ:
+            log.info(
+                "Ignoring %s environment variable, using --key-file'%s' instead",
+                MVT_IOS_BACKUP_PASSWORD,
+                key_file,
+            )
+
+        backup.decrypt_with_key_file(key_file)
+    elif password:
+        log.info(
+            "Your password may be visible in the process table because it "
+            "was supplied on the command line!"
+        )
+
+        if MVT_IOS_BACKUP_PASSWORD in os.environ:
+            log.info(
+                "Ignoring %s environment variable, using --passwordargument instead",
+                MVT_IOS_BACKUP_PASSWORD,
+            )
+
+        backup.decrypt_with_password(password)
+    elif MVT_IOS_BACKUP_PASSWORD in os.environ:
+        log.info("Using password from %s environment variable", MVT_IOS_BACKUP_PASSWORD)
+        backup.decrypt_with_password(os.environ[MVT_IOS_BACKUP_PASSWORD])
+    else:
+        sekrit = prompt_password("Enter backup password: ")
+        backup.decrypt_with_password(sekrit)
+
+    if not backup.can_process():
+        ctx.exit(1)
+
+    backup.process_backup()
+
+    if hashes:
+        info = {"encrypted": [], "decrypted": []}
+        for file in generate_hashes_from_path(backup_path, log):
+            info["encrypted"].append(file)
+        for file in generate_hashes_from_path(destination, log):
+            info["decrypted"].append(file)
+        info_path = os.path.join(destination, "info.json")
+        with open(info_path, "w+", encoding="utf-8") as handle:
+            json.dump(info, handle, indent=4)
+
+
+# ==============================================================================
+# Command: extract-key
+# ==============================================================================
+@cli.command(
+    "extract-key", context_settings=CONTEXT_SETTINGS, help=HELP_MSG_EXTRACT_KEY
+)
+@click.option("--password", "-p", help=HELP_MSG_IOS_BACKUP_PASSWORD)
+@click.option(
+    "--key-file",
+    "-k",
+    required=False,
+    type=click.Path(exists=False, file_okay=True, dir_okay=False, writable=True),
+    help=HELP_MSG_BACKUP_KEYFILE,
+)
+@click.argument("BACKUP_PATH", type=click.Path(exists=True))
+def extract_key(password, key_file, backup_path):
+    from .decrypt import DecryptBackup
+
+    backup = DecryptBackup(backup_path)
+
+    if password:
+        log.info(
+            "Your password may be visible in the process table because it "
+            "was supplied on the command line!"
+        )
+
+        if MVT_IOS_BACKUP_PASSWORD in os.environ:
+            log.info(
+                "Ignoring %s environment variable, using --password argument instead",
+                MVT_IOS_BACKUP_PASSWORD,
+            )
+    elif MVT_IOS_BACKUP_PASSWORD in os.environ:
+        log.info("Using password from %s environment variable", MVT_IOS_BACKUP_PASSWORD)
+        password = os.environ[MVT_IOS_BACKUP_PASSWORD]
+    else:
+        password = prompt_password("Enter backup password: ")
+
+    backup.decrypt_with_password(password)
+    backup.get_key()
+
+    if key_file:
+        backup.write_key(key_file)
+
+
+# ==============================================================================
+# Command: check-backup
+# ==============================================================================
+@cli.command(
+    "check-backup", context_settings=CONTEXT_SETTINGS, help=HELP_MSG_CHECK_IOS_BACKUP
+)
+@click.option(
+    "--iocs",
+    "-i",
+    type=click.Path(exists=True),
+    multiple=True,
+    default=[],
+    help=HELP_MSG_IOC,
+)
+@click.option("--output", "-o", type=click.Path(exists=False), help=HELP_MSG_OUTPUT)
+@click.option("--fast", "-f", is_flag=True, help=HELP_MSG_FAST)
+@click.option("--list-modules", "-l", is_flag=True, help=HELP_MSG_LIST_MODULES)
+@click.option("--module", "-m", help=HELP_MSG_MODULE)
+@click.option(
+    "--load-module",
+    type=click.Path(exists=True),
+    multiple=True,
+    default=[],
+    help=HELP_MSG_LOAD_MODULE,
+)
+@click.option("--hashes", "-H", is_flag=True, help=HELP_MSG_HASHES)
+@click.option("--verbose", "-v", is_flag=True, help=HELP_MSG_VERBOSE_COMMAND)
+@click.argument("BACKUP_PATH", type=click.Path(exists=True))
+@click.pass_context
+def check_backup(
+    ctx,
+    iocs,
+    output,
+    fast,
+    list_modules,
+    module,
+    load_module,
+    hashes,
+    verbose,
+    backup_path,
+):
+    from .cmd_check_backup import CmdIOSCheckBackup
+
+    set_verbose_logging(verbose or _get_verbose(ctx))
+    module_options = {"fast_mode": fast}
+    custom_modules = _load_custom_modules(load_module)
+
+    cmd = CmdIOSCheckBackup(
+        target_path=backup_path,
+        results_path=output,
+        ioc_files=iocs,
+        module_name=module,
+        module_options=module_options,
+        hashes=hashes,
+        disable_version_check=_get_disable_flags(ctx)[0],
+        disable_indicator_check=_get_disable_flags(ctx)[1],
+        custom_modules=custom_modules,
+    )
+
+    if list_modules:
+        cmd.list_modules()
+        return
+
+    if not cmd.resolve_backup_path():
+        ctx.exit(1)
+
+    log.info("Checking iTunes backup located at: %s", cmd.target_path)
+
+    cmd.run()
+    cmd.show_alerts_brief()
+    cmd.show_support_message()
+
+
+# ==============================================================================
+# Command: check-fs
+# ==============================================================================
+@cli.command("check-fs", context_settings=CONTEXT_SETTINGS, help=HELP_MSG_CHECK_FS)
+@click.option(
+    "--iocs",
+    "-i",
+    type=click.Path(exists=True),
+    multiple=True,
+    default=[],
+    help=HELP_MSG_IOC,
+)
+@click.option("--output", "-o", type=click.Path(exists=False), help=HELP_MSG_OUTPUT)
+@click.option("--fast", "-f", is_flag=True, help=HELP_MSG_FAST)
+@click.option("--list-modules", "-l", is_flag=True, help=HELP_MSG_LIST_MODULES)
+@click.option("--module", "-m", help=HELP_MSG_MODULE)
+@click.option(
+    "--load-module",
+    type=click.Path(exists=True),
+    multiple=True,
+    default=[],
+    help=HELP_MSG_LOAD_MODULE,
+)
+@click.option("--hashes", "-H", is_flag=True, help=HELP_MSG_HASHES)
+@click.option("--verbose", "-v", is_flag=True, help=HELP_MSG_VERBOSE_COMMAND)
+@click.argument("DUMP_PATH", type=click.Path(exists=True))
+@click.pass_context
+def check_fs(
+    ctx,
+    iocs,
+    output,
+    fast,
+    list_modules,
+    module,
+    load_module,
+    hashes,
+    verbose,
+    dump_path,
+):
+    from .cmd_check_fs import CmdIOSCheckFS
+
+    set_verbose_logging(verbose or _get_verbose(ctx))
+    module_options = {"fast_mode": fast}
+    custom_modules = _load_custom_modules(load_module)
+
+    cmd = CmdIOSCheckFS(
+        target_path=dump_path,
+        results_path=output,
+        ioc_files=iocs,
+        module_name=module,
+        module_options=module_options,
+        hashes=hashes,
+        disable_version_check=_get_disable_flags(ctx)[0],
+        disable_indicator_check=_get_disable_flags(ctx)[1],
+        custom_modules=custom_modules,
+    )
+
+    if list_modules:
+        cmd.list_modules()
+        return
+
+    log.info("Checking iOS filesystem located at: %s", dump_path)
+
+    cmd.run()
+    cmd.show_alerts_brief()
+    cmd.show_support_message()
+
+
+# ==============================================================================
+# Command: check-sysdiagnose
+# ==============================================================================
+@cli.command(
+    "check-sysdiagnose",
+    context_settings=CONTEXT_SETTINGS,
+    help=HELP_MSG_CHECK_SYSDIAGNOSE,
+)
+@click.option(
+    "--iocs",
+    "-i",
+    type=click.Path(exists=True),
+    multiple=True,
+    default=[],
+    help=HELP_MSG_IOC,
+)
+@click.option("--output", "-o", type=click.Path(exists=False), help=HELP_MSG_OUTPUT)
+@click.option("--list-modules", "-l", is_flag=True, help=HELP_MSG_LIST_MODULES)
+@click.option("--module", "-m", help=HELP_MSG_MODULE)
+@click.option(
+    "--load-module",
+    type=click.Path(exists=True),
+    multiple=True,
+    default=[],
+    help=HELP_MSG_LOAD_MODULE,
+)
+@click.option("--hashes", "-H", is_flag=True, help=HELP_MSG_HASHES)
+@click.option("--verbose", "-v", is_flag=True, help=HELP_MSG_VERBOSE_COMMAND)
+@click.argument("SYSDIAGNOSE_PATH", type=click.Path(exists=True))
+@click.pass_context
+def check_sysdiagnose(
+    ctx,
+    iocs,
+    output,
+    list_modules,
+    module,
+    load_module,
+    hashes,
+    verbose,
+    sysdiagnose_path,
+):
+    from .cmd_check_sysdiagnose import CmdIOSCheckSysdiagnose
+
+    set_verbose_logging(verbose or _get_verbose(ctx))
+    custom_modules = _load_custom_modules(load_module)
+    cmd = CmdIOSCheckSysdiagnose(
+        target_path=sysdiagnose_path,
+        results_path=output,
+        ioc_files=iocs,
+        module_name=module,
+        hashes=hashes,
+        disable_version_check=_get_disable_flags(ctx)[0],
+        disable_indicator_check=_get_disable_flags(ctx)[1],
+        custom_modules=custom_modules,
+    )
+
+    if not cmd._available_modules():
+        raise click.ClickException(
+            "No custom modules support mvt-ios check-sysdiagnose. "
+            "Load a module that declares supported_commands = "
+            "((\"ios\", \"check-sysdiagnose\"),)."
+        )
+
+    if list_modules:
+        cmd.list_modules()
+        return
+
+    log.info("Checking iOS sysdiagnose at path: %s", sysdiagnose_path)
+    cmd.run()
+    cmd.show_alerts_brief()
+    cmd.show_support_message()
+
+
+# ==============================================================================
+# Command: check-iocs
+# ==============================================================================
+@cli.command("check-iocs", context_settings=CONTEXT_SETTINGS, help=HELP_MSG_CHECK_IOCS)
+@click.option(
+    "--iocs",
+    "-i",
+    type=click.Path(exists=True),
+    multiple=True,
+    default=[],
+    help=HELP_MSG_IOC,
+)
+@click.option("--list-modules", "-l", is_flag=True, help=HELP_MSG_LIST_MODULES)
+@click.option("--module", "-m", help=HELP_MSG_MODULE)
+@click.option(
+    "--load-module",
+    type=click.Path(exists=True),
+    multiple=True,
+    default=[],
+    help=HELP_MSG_LOAD_MODULE,
+)
+@click.argument("FOLDER", type=click.Path(exists=True))
+@click.pass_context
+def check_iocs(ctx, iocs, list_modules, module, load_module, folder):
+    from mvt.common.cmd_check_iocs import CmdCheckIOCS
+
+    from .command_modules import IOS_CHECK_IOCS_MODULES
+
+    custom_modules = _load_custom_modules(load_module)
+    cmd = CmdCheckIOCS(
+        target_path=folder,
+        ioc_files=iocs,
+        module_name=module,
+        disable_version_check=_get_disable_flags(ctx)[0],
+        disable_indicator_check=_get_disable_flags(ctx)[1],
+        custom_modules=custom_modules,
+        platform="ios",
+    )
+    cmd.modules = IOS_CHECK_IOCS_MODULES
+
+    if list_modules:
+        cmd.list_modules()
+        return
+
+    cmd.run()
+    cmd.show_alerts_brief()
+    cmd.show_support_message()
+
+
+# ==============================================================================
+# Command: download-iocs
+# ==============================================================================
+@cli.command("download-iocs", context_settings=CONTEXT_SETTINGS, help=HELP_MSG_STIX2)
+def download_iocs():
+    from mvt.common.updates import IndicatorsUpdates
+
+    ioc_updates = IndicatorsUpdates()
+    ioc_updates.update()
+
+
+# ==============================================================================
+# Entry point of the mvt-ios console script
+# ==============================================================================
+def main() -> None:
+    """Register the external commands and run the mvt-ios CLI.
+
+    External commands are registered here rather than when this module is
+    imported, so that importing MVT never runs third-party code and a plugin
+    importing from MVT cannot re-enter a module that is still initializing.
+    """
+    register_cli_plugins(
+        cli,
+        entry_point_group=IOS_CLI_PLUGIN_GROUP,
+        environment_variable=MVT_IOS_CUSTOM_COMMANDS_ENV,
+    )
+    cli()

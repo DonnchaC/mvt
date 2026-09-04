@@ -3,16 +3,22 @@
 # Use of this software is governed by the MVT License 1.1 that can be found at
 #   https://license.mvt.re/1.1/
 
+import json
 import logging
 import os
+from datetime import datetime
 
+from mvt.common.log import MVTLogHandler
 from mvt.common.utils import (
+    CustomJSONEncoder,
     convert_datetime_to_iso,
     convert_mactime_to_iso,
     convert_unix_to_iso,
     convert_unix_to_utc_datetime,
     generate_hashes_from_path,
     get_sha256_from_file_path,
+    init_logging,
+    set_verbose_logging,
 )
 
 from ..utils import get_artifact_folder
@@ -39,6 +45,14 @@ class TestDateConversions:
         converted = convert_unix_to_utc_datetime(TEST_DATE_EPOCH)
         assert convert_datetime_to_iso(converted) == TEST_DATE_ISO
 
+    def test_convert_timezone_aware_to_iso(self):
+        assert (
+            convert_datetime_to_iso(
+                datetime.strptime("2024-09-30 11:21:20+0200", "%Y-%m-%d %H:%M:%S%z")
+            )
+            == "2024-09-30 09:21:20.000000"
+        )
+
 
 class TestHashes:
     def test_hash_from_file(self):
@@ -51,7 +65,7 @@ class TestHashes:
     def test_hash_from_folder(self):
         path = os.path.join(get_artifact_folder(), "androidqf")
         hashes = list(generate_hashes_from_path(path, logging))
-        assert len(hashes) == 5
+        assert len(hashes) == 8
         # Sort the files to have reliable order for tests.
         hashes = sorted(hashes, key=lambda x: x["file_path"])
         assert hashes[0]["file_path"] == os.path.join(path, "backup.ab")
@@ -60,7 +74,78 @@ class TestHashes:
             == "f0e32fe8a7fd5ac0e2de19636d123c0072e979396986139ba2bc49ec385dc325"
         )
         assert hashes[1]["file_path"] == os.path.join(path, "dumpsys.txt")
+
+        # This needs to be updated when we add or edit files in AndroidQF folder
         assert (
             hashes[1]["sha256"]
-            == "bac858001784657a43c7cfa771fd1fc4a49428eb6b7c458a1ebf2fdeef78dd86"
+            == "9fb6396b64cfff30e2a459a64496d3c1386926d09edd68be2d878de45fa7b3a9"
         )
+
+
+class TestCustomJSONEncoder:
+    def test__normal_input(self):
+        assert json.dumps({"a": "b"}, cls=CustomJSONEncoder) == '{"a": "b"}'
+
+    def test__datetime_object(self):
+        assert (
+            json.dumps(
+                {"timestamp": datetime(2023, 11, 13, 12, 21, 49, 727467)},
+                cls=CustomJSONEncoder,
+            )
+            == '{"timestamp": "2023-11-13 12:21:49.727467"}'
+        )
+
+    def test__bytes_non_utf_8(self):
+        assert (
+            json.dumps({"identifier": b"\xa8\xa9"}, cls=CustomJSONEncoder)
+            == """{"identifier": "\\\\xa8\\\\xa9"}"""
+        )
+
+    def test__bytes_valid_utf_8(self):
+        assert (
+            json.dumps({"name": "家".encode()}, cls=CustomJSONEncoder)
+            == '{"name": "\\u5bb6"}'
+        )
+
+
+class TestInitLogging:
+    def test__init_logging_is_idempotent(self):
+        # Loaded module packages may import an MVT CLI module, which calls
+        # init_logging() again at import time. A second call must not add
+        # a duplicate console handler.
+        log = logging.getLogger("mvt")
+        init_logging()
+        handler_count = sum(
+            isinstance(handler, MVTLogHandler) for handler in log.handlers
+        )
+        init_logging()
+        assert (
+            sum(isinstance(handler, MVTLogHandler) for handler in log.handlers)
+            == handler_count
+        )
+
+    def test_verbose_logging_finds_the_console_handler_among_others(self):
+        # Something else may have attached a handler to the "mvt" logger
+        # before MVT did, so the console handler is not always the first.
+        log = logging.getLogger("mvt")
+        init_logging()
+        foreign_handler = logging.NullHandler()
+        foreign_handler.setLevel(logging.CRITICAL)
+        log.handlers.insert(0, foreign_handler)
+
+        try:
+            set_verbose_logging(True)
+            console_handlers = [
+                handler
+                for handler in log.handlers
+                if isinstance(handler, MVTLogHandler)
+            ]
+            assert console_handlers
+            assert all(handler.level == logging.DEBUG for handler in console_handlers)
+            assert foreign_handler.level == logging.CRITICAL
+
+            set_verbose_logging(False)
+            assert all(handler.level == logging.INFO for handler in console_handlers)
+            assert foreign_handler.level == logging.CRITICAL
+        finally:
+            log.handlers.remove(foreign_handler)

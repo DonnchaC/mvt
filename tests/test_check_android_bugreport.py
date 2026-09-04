@@ -1,5 +1,5 @@
 # Mobile Verification Toolkit (MVT)
-# Copyright (c) 2021-2023 Claudio Guarnieri.
+# Copyright (c) 2021-2023 The MVT Authors.
 # Use of this software is governed by the MVT License 1.1 that can be found at
 #   https://license.mvt.re/1.1/
 
@@ -18,3 +18,13 @@ class TestCheckBugreportCommand:
         path = os.path.join(get_artifact_folder(), "android_data/bugreport/")
         result = runner.invoke(check_bugreport, [path])
         assert result.exit_code == 0
+
+    def test_invalid_zip_reports_clean_error(self, tmp_path):
+        path = tmp_path / "invalid.zip"
+        path.write_bytes(b"not a zip archive")
+
+        result = CliRunner().invoke(check_bugreport, [str(path)])
+
+        assert result.exit_code == 1
+        assert "Invalid bugreport archive" in result.output
+        assert "Traceback" not in result.output

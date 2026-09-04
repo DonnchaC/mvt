@@ -9,6 +9,32 @@ Libraries:
   android.test.mock ->  (jar) /system/framework/android.test.mock.jar
 
 
+Activity Resolver Table:
+  Full MIME Types:
+      text/comma-separated-values:
+        18d43d com.samsung.android.messaging/.ui.RcsTransferContent
+        72c6194 com.samsung.android.scloud/.app.ui.drive.activity.UploadToDriveActivity2 (2 filters)
+        a8101e7 com.samsung.android.scloud/.app.ui.drive.activity.UploadToDriveActivity (2 filters)
+      application/com.google.android.gms.car:
+        f6b2432 com.google.android.gms/.car.FirstActivity
+      slide/*:
+        651d583 com.android.bluetooth/.opp.BluetoothOppLauncherActivity (2 filters)
+      application/pkix-cert:
+        6380300 com.android.certinstaller/.CertInstallerMain
+
+  Non-Data Actions:
+      com.samsung.android.intent.SOCIAL_UPDATES_FEED_VIEW:
+        b928288 com.samsung.android.app.social/.feed.FeedsActivity
+      android.settings.FINGERPRINT_SETUP:
+        e573421 com.android.settings/.biometrics.fingerprint.SetupFingerprintEnrollIntroduction
+      com.msc.action.samsungaccount.myinfowebview_external:
+        f897046 com.osp.app.signin/com.samsung.android.samsungaccount.authentication.ui.check.user.MyProfileWebView
+      com.google.android.gms.autofill.ACTION_SETTINGS:
+        9de5207 com.google.android.gms/.autofill.ui.AutofillSettingsPrivacyHubActivity
+
+
+
+
 
 Packages:
   Package [com.samsung.android.provider.filterprovider] (d64f8e0):
@@ -123,4 +149,26 @@ Packages:
         android.permission.READ_CONTACTS: granted=false, flags=[ USER_SENSITIVE_WHEN_GRANTED]
 
 
+
+
+Receiver Resolver Table:
+  Full MIME Types:
+      application/gmail-ls:
+        231cb24 com.google.android.gm/.GmailReceiver
+        3441042 com.google.android.gm/.widget.GoogleMailWidgetProvider (3 filters)
+        cf0a68d com.google.android.gm/.widget.GmailWidgetProvider (3 filters)
+      vnd.android.cursor.dir/voicemails:
+        39596b6 com.samsung.android.app.telephonyui/com.android.voicemail.impl.sync.VoicemailProviderChangeReceiver
+      application/*:
+        8e50848 com.android.vending/com.google.android.finsky.recoverymode.download.impl.RecoveryModeDownloadBroadcastReceiver
+
+  Non-Data Actions:
+      com.android.storagemanager.automatic.SHOW_NOTIFICATION:
+        417c3b3 com.android.storagemanager/.automatic.NotificationController
+      android.provider.action.EXTERNAL_PROVIDER_CHANGE:
+        b310d70 com.samsung.android.messaging/.service.syncservice.ExtProviderChangeReceiver
+      com.google.android.projection.gearhead.RESET_USB_FUNCTION:
+        da90126 com.google.android.projection.gearhead/com.google.android.apps.auto.components.connectivity.reset.ConnectionResetReceiver
+      com.samsung.cmh.action.CMH_SYNC:
+        d5c0372 com.samsung.cmh/.core.SystemBroadcastReceiver$CMHBroadcastReceiver
 

@@ -1,14 +1,16 @@
 # Mobile Verification Toolkit (MVT)
-# Copyright (c) 2021-2023 Claudio Guarnieri.
+# Copyright (c) 2021-2023 The MVT Authors.
 # Use of this software is governed by the MVT License 1.1 that can be found at
 #   https://license.mvt.re/1.1/
 
 import os
 from pathlib import Path
 
-from mvt.android.modules.bugreport.appops import Appops
-from mvt.android.modules.bugreport.getprop import Getprop
-from mvt.android.modules.bugreport.packages import Packages
+from mvt.android.modules.bugreport.dumpsys_appops import DumpsysAppops
+from mvt.android.modules.bugreport.dumpsys_getprop import DumpsysGetProp
+from mvt.android.modules.bugreport.dumpsys_packages import DumpsysPackages
+from mvt.android.modules.bugreport.dumpsys_receivers import DumpsysReceivers
+from mvt.android.modules.bugreport.tombstones import Tombstones
 from mvt.common.module import run_module
 
 from ..utils import get_artifact_folder
@@ -25,27 +27,74 @@ class TestBugreportAnalysis:
                 folder_files.append(
                     os.path.relpath(os.path.join(root, file_name), parent_path)
                 )
-        m.from_folder(fpath, folder_files)
+        m.from_dir(fpath, folder_files)
         run_module(m)
         return m
 
     def test_appops_module(self):
-        m = self.launch_bug_report_module(Appops)
+        m = self.launch_bug_report_module(DumpsysAppops)
         assert len(m.results) == 12
         assert len(m.timeline) == 16
-        assert len(m.detected) == 0
+
+        detected_by_ioc = [
+            detected
+            for detected in m.alertstore.alerts
+            if detected.event.get("matched_indicator")
+        ]
+        assert (
+            len(m.alertstore.alerts) == 1
+        )  # Hueristic detection for suspicious permissions
+        assert len(detected_by_ioc) == 0
 
     def test_packages_module(self):
-        m = self.launch_bug_report_module(Packages)
+        m = self.launch_bug_report_module(DumpsysPackages)
         assert len(m.results) == 2
         assert (
             m.results[0]["package_name"]
             == "com.samsung.android.provider.filterprovider"
         )
         assert m.results[1]["package_name"] == "com.instagram.android"
+        assert m.results[0]["installer"] is None
+        assert m.results[1]["installer"] == "com.android.vending"
         assert len(m.results[0]["permissions"]) == 4
-        assert len(m.results[1]["permissions"]) == 32
+        assert len(m.results[1]["permissions"]) == 20
+        assert len(m.results[1]["users"][0]["permissions"]) == 19
 
     def test_getprop_module(self):
-        m = self.launch_bug_report_module(Getprop)
+        m = self.launch_bug_report_module(DumpsysGetProp)
         assert len(m.results) == 0
+
+    def test_receivers_match_exact_package_name(self, indicators_factory):
+        intent = "android.intent.action.PHONE_STATE"
+        false_positive = {
+            "resolver_type": "non_data_action",
+            "key": intent,
+            "package_name": "com.android.phone",
+            "component": (
+                "com.android.phone/"
+                "com.android.services.telephony.sip.SipIncomingCallReceiver"
+            ),
+            "filter_count": 1,
+        }
+        malicious_receiver = {
+            "resolver_type": "non_data_action",
+            "key": intent,
+            "package_name": "com.android.services",
+            "component": "com.android.services/com.example.SomeReceiver",
+            "filter_count": 1,
+        }
+        module = DumpsysReceivers(results=[false_positive, malicious_receiver])
+        module.indicators = indicators_factory(app_ids=["com.android.services"])
+
+        module.check_indicators()
+
+        assert len(module.alertstore.alerts) == 1
+        alert = module.alertstore.alerts[0]
+        assert alert.event == malicious_receiver
+        assert alert.matched_indicator.value == "com.android.services"
+
+    def test_tombstones_modules(self):
+        m = self.launch_bug_report_module(Tombstones)
+        assert len(m.results) == 2
+        assert m.results[1]["pid"] == 3559
+        assert m.results[0]["sources"]["text"]["parsed"] is True

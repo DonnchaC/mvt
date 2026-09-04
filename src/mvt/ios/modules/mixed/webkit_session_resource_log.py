@@ -1,0 +1,214 @@
+# Mobile Verification Toolkit (MVT)
+# Copyright (c) 2021-2023 The MVT Authors.
+# Use of this software is governed by the MVT License 1.1 that can be found at
+#   https://license.mvt.re/1.1/
+
+import logging
+import os
+import plistlib
+from typing import Optional
+
+from mvt.common.module_types import ModuleResults
+from mvt.common.utils import convert_datetime_to_iso
+
+from ..base import IOSExtraction
+
+WEBKIT_SESSION_RESOURCE_LOG_BACKUP_IDS = [
+    "a500ee38053454a02e990957be8a251935e28d3f",
+]
+WEBKIT_SESSION_RESOURCE_LOG_BACKUP_RELPATH = "Library/WebKit/WebsiteData/ResourceLoadStatistics/full_browsing_session_resourceLog.plist"  # pylint: disable=line-too-long
+WEBKIT_SESSION_RESOURCE_LOG_ROOT_PATHS = [
+    "private/var/mobile/Containers/Data/Application/*/SystemData/com.apple.SafariViewService/Library/WebKit/WebsiteData/full_browsing_session_resourceLog.plist",  # pylint: disable=line-too-long
+    "private/var/mobile/Containers/Data/Application/*/Library/WebKit/WebsiteData/ResourceLoadStatistics/full_browsing_session_resourceLog.plist",  # pylint: disable=line-too-long
+    "private/var/mobile/Library/WebClips/*/Storage/full_browsing_session_resourceLog.plist",  # pylint: disable=line-too-long
+]
+
+
+class WebkitSessionResourceLog(IOSExtraction):
+    """This module extracts records from WebKit browsing session
+    resource logs, and checks them against any provided list of
+    suspicious domains.
+
+
+    """
+
+    def __init__(
+        self,
+        file_path: Optional[str] = None,
+        target_path: Optional[str] = None,
+        results_path: Optional[str] = None,
+        module_options: Optional[dict] = None,
+        log: logging.Logger = logging.getLogger(__name__),
+        results: Optional[ModuleResults] = None,
+    ) -> None:
+        super().__init__(
+            file_path=file_path,
+            target_path=target_path,
+            results_path=results_path,
+            module_options=module_options,
+            log=log,
+            results=results,
+        )
+
+        self.results: dict = results if results is not None else {}
+
+    @staticmethod
+    def _extract_domains(entries):
+        if not entries:
+            return []
+
+        domains = []
+        for entry in entries:
+            if "origin" in entry:
+                domains.append(entry["origin"])
+            if "domain" in entry:
+                domains.append(entry["domain"])
+
+        return domains
+
+    def check_indicators(self) -> None:
+        if not self.indicators:
+            return
+
+        records = []
+        url_batches = []
+        for _, entries in self.results.items():
+            for entry in entries:
+                source_domains = self._extract_domains(entry["redirect_source"])
+                destination_domains = self._extract_domains(
+                    entry["redirect_destination"]
+                )
+
+                subframe_origins = self._extract_domains(
+                    entry["subframe_under_origin"]
+                )
+                subresource_domains = self._extract_domains(
+                    entry["subresource_under_origin"]
+                )
+
+                all_origins = list(
+                    set(
+                        [entry["origin"]]
+                        + source_domains
+                        + destination_domains
+                        + subframe_origins
+                        + subresource_domains
+                    )
+                )
+
+                records.append((entry, source_domains, destination_domains))
+                url_batches.append(all_origins)
+
+        for record, ioc_match in zip(
+            records, self.indicators.check_url_batches(url_batches)
+        ):
+            if ioc_match:
+                entry, source_domains, destination_domains = record
+                self.alertstore.critical(
+                    ioc_match.message, "", entry, matched_indicator=ioc_match.ioc
+                )
+
+                redirect_path = ""
+                if len(source_domains) > 0:
+                    redirect_path += "SOURCE: "
+                    for idx, item in enumerate(source_domains):
+                        source_domains[idx] = f'"{item}"'
+
+                    redirect_path += ", ".join(source_domains)
+                    redirect_path += " -> "
+
+                redirect_path += f'ORIGIN: "{entry["origin"]}"'
+
+                if len(destination_domains) > 0:
+                    redirect_path += " -> "
+                    redirect_path += "DESTINATION: "
+                    for idx, item in enumerate(destination_domains):
+                        destination_domains[idx] = f'"{item}"'
+
+                    redirect_path += ", ".join(destination_domains)
+
+                self.alertstore.high(
+                    f"Found HTTP redirect between suspicious domains: {redirect_path}",
+                    "",
+                    entry,
+                )
+
+    def _extract_browsing_stats(self, log_path):
+        items = []
+
+        with open(log_path, "rb") as handle:
+            file_plist = plistlib.load(handle)
+
+        if "browsingStatistics" not in file_plist:
+            return items
+
+        browsing_stats = file_plist["browsingStatistics"]
+
+        for item in browsing_stats:
+            most_recent_interaction, last_seen = None, None
+            if "mostRecentUserInteraction" in item:
+                try:
+                    most_recent_interaction = convert_datetime_to_iso(
+                        item["mostRecentUserInteraction"]
+                    )
+                except Exception:
+                    self.log.error(
+                        f'Error converting date of Safari resource"most recent interaction": {item["mostRecentUserInteraction"]}'
+                    )
+            if "lastSeen" in item:
+                try:
+                    last_seen = convert_datetime_to_iso(item["lastSeen"])
+                except Exception:
+                    self.log.error(
+                        f'Error converting date of Safari resource"last seen": {item["lastSeen"]}'
+                    )
+
+            items.append(
+                {
+                    "origin": item.get("PrevalentResourceOrigin", ""),
+                    "redirect_source": item.get("topFrameUniqueRedirectsFrom", ""),
+                    "redirect_destination": item.get("topFrameUniqueRedirectsTo", ""),
+                    "subframe_under_origin": item.get(
+                        "subframeUnderTopFrameOrigins", ""
+                    ),
+                    "subresource_under_origin": item.get(
+                        "subresourceUnderTopFrameOrigins", ""
+                    ),
+                    "user_interaction": item.get("hadUserInteraction"),
+                    "most_recent_interaction": most_recent_interaction,
+                    "last_seen": last_seen,
+                }
+            )
+
+        return items
+
+    def run(self) -> None:
+        if self.is_backup:
+            for log_file in self._get_backup_files_from_manifest(
+                relative_path=WEBKIT_SESSION_RESOURCE_LOG_BACKUP_RELPATH
+            ):
+                log_path = self._get_backup_file_from_id(log_file["file_id"])
+
+                if not log_path:
+                    continue
+
+                self.log.info(
+                    "Found Safari browsing session resource log at path: %s", log_path
+                )
+                self.results[log_path] = self._extract_browsing_stats(log_path)
+        elif self.is_fs_dump:
+            for log_path in self._get_fs_files_from_patterns(
+                WEBKIT_SESSION_RESOURCE_LOG_ROOT_PATHS
+            ):
+                self.log.info(
+                    "Found Safari browsing session resource log at path: %s", log_path
+                )
+                if not self.target_path:
+                    continue
+                key = os.path.relpath(log_path, self.target_path)
+                self.results[key] = self._extract_browsing_stats(log_path)
+
+        self.log.info(
+            "Extracted records from %d Safari browsing session resource logs",
+            len(self.results),
+        )

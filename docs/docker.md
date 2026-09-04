@@ -2,7 +2,22 @@ Using Docker simplifies having all the required dependencies and tools (includin
 
 Install Docker following the [official documentation](https://docs.docker.com/get-docker/).
 
-Once installed, you can clone MVT's repository and build its Docker image:
+Once Docker is installed, you can run MVT by downloading a prebuilt MVT Docker image, or by building a Docker image yourself from the MVT source repo.
+
+### Using the prebuilt Docker image
+
+```bash
+docker pull ghcr.io/mvt-project/mvt
+```
+
+You can then run the Docker container with:
+
+```
+docker run -it ghcr.io/mvt-project/mvt
+```
+
+
+### Build and run Docker image from source
 
 ```bash
 git clone https://github.com/mvt-project/mvt.git
@@ -18,16 +33,16 @@ docker run -it mvt
 
 If a prompt is spawned successfully, you can close it with `exit`.
 
-If you wish to use MVT to test an Android device you will need to enable the container's access to the host's USB devices. You can do so by enabling the `--privileged` flag and mounting the USB bus device as a volume:
+## Access an iOS device from Docker
+
+On the Linux host, install and start [usbmuxd](https://github.com/libimobiledevice/usbmuxd), then connect and unlock the iOS device. The daemon exposes the device through the `/var/run/usbmuxd` socket.
+
+Bind that socket into the container to let MVT communicate with the device:
 
 ```bash
-docker run -it --privileged -v /dev/bus/usb:/dev/bus/usb mvt
+docker run -it \
+    --mount type=bind,source=/var/run/usbmuxd,target=/var/run/usbmuxd \
+    ghcr.io/mvt-project/mvt
 ```
 
-**Please note:** the `--privileged` parameter is generally regarded as a security risk. If you want to learn more about this check out [this explainer on container escapes](https://blog.trailofbits.com/2019/07/19/understanding-docker-container-escapes/) as it gives access to the whole system.
-
-Recent versions of Docker provide a `--device` parameter allowing to specify a precise USB device without enabling `--privileged`:
-
-```bash
-docker run -it --device=/dev/<your_usb_port> mvt
-```
+If you built the image from source, replace `ghcr.io/mvt-project/mvt` with `mvt`. 

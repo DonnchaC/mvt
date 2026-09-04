@@ -1,5 +1,5 @@
 # Mobile Verification Toolkit (MVT)
-# Copyright (c) 2021-2023 Claudio Guarnieri.
+# Copyright (c) 2021-2023 The MVT Authors.
 # Use of this software is governed by the MVT License 1.1 that can be found at
 #   https://license.mvt.re/1.1/
 
@@ -22,7 +22,7 @@ class TestBackupModule:
         for root, subdirs, subfiles in os.walk(os.path.abspath(backup_path)):
             for fname in subfiles:
                 files.append(os.path.relpath(os.path.join(root, fname), backup_path))
-        mod.from_folder(backup_path, files)
+        mod.from_dir(backup_path, files)
         run_module(mod)
         assert len(mod.results) == 2
         assert len(mod.results[0]["links"]) == 1

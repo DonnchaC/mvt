@@ -4,24 +4,53 @@
 
 # Mobile Verification Toolkit
 
+> [!IMPORTANT]
+> We recently merged the "v3" branch. This introduced breaking changes. If you relied on mvt output in other scripts They might have broken. More details: https://github.com/mvt-project/mvt/issues/757
+
 [![](https://img.shields.io/pypi/v/mvt)](https://pypi.org/project/mvt/)
 [![Documentation Status](https://readthedocs.org/projects/mvt/badge/?version=latest)](https://docs.mvt.re/en/latest/?badge=latest)
-[![CI](https://github.com/mvt-project/mvt/actions/workflows/python-package.yml/badge.svg)](https://github.com/mvt-project/mvt/actions/workflows/python-package.yml)
+[![CI](https://github.com/mvt-project/mvt/actions/workflows/tests.yml/badge.svg)](https://github.com/mvt-project/mvt/actions/workflows/tests.yml)
 [![Downloads](https://pepy.tech/badge/mvt)](https://pepy.tech/project/mvt)
 
 Mobile Verification Toolkit (MVT) is a collection of utilities to simplify and automate the process of gathering forensic traces helpful to identify a potential compromise of Android and iOS devices.
 
-It has been developed and released by the [Amnesty International Security Lab](https://www.amnesty.org/en/tech/) in July 2021 in the context of the [Pegasus project](https://forbiddenstories.org/about-the-pegasus-project/) along with [a technical forensic methodology and forensic evidence](https://www.amnesty.org/en/latest/research/2021/07/forensic-methodology-report-how-to-catch-nso-groups-pegasus/).
+It has been developed and released by the [Amnesty International Security Lab](https://securitylab.amnesty.org) in July 2021 in the context of the [Pegasus Project](https://forbiddenstories.org/about-the-pegasus-project/) along with [a technical forensic methodology](https://www.amnesty.org/en/latest/research/2021/07/forensic-methodology-report-how-to-catch-nso-groups-pegasus/). It continues to be maintained by Amnesty International and other contributors.
 
-*Warning*: MVT is a forensic research tool intended for technologists and investigators. Using it requires understanding the basics of forensic analysis and using command-line tools. This is not intended for end-user self-assessment. If you are concerned with the security of your device please seek expert assistance.
+> **Note**
+> MVT is a forensic research tool intended for technologists and investigators. It requires understanding digital forensics and using command-line tools. This is not intended for end-user self-assessment. If you are concerned with the security of your device please seek reputable expert assistance.
+>
 
+### Indicators of Compromise
+
+MVT supports using public [indicators of compromise (IOCs)](https://github.com/mvt-project/mvt-indicators) to scan mobile devices for potential traces of targeting or infection by known spyware campaigns. This includes IOCs published by [Amnesty International](https://github.com/AmnestyTech/investigations/) and other  research groups.
+
+> **Warning**
+> Public indicators of compromise are insufficient to determine that a device is "clean", and not targeted with a particular spyware tool. Reliance on public indicators alone can miss recent forensic traces and give a false sense of security.
+>
+> Reliable and comprehensive digital forensic support and triage requires access to non-public indicators, research and threat intelligence.
+>
+>Such support is available to civil society through [Amnesty International's Security Lab](https://securitylab.amnesty.org/get-help/?c=mvt_docs) or through our forensic partnership with [Access Now’s Digital Security Helpline](https://www.accessnow.org/help/).
+
+More information about using indicators of compromise with MVT is available in the [documentation](https://docs.mvt.re/en/latest/iocs/).
 
 ## Installation
 
-MVT can be installed from sources or from [PyPi](https://pypi.org/project/mvt/) (you will need some dependencies, check the [documentation](https://docs.mvt.re/en/latest/install/)):
+MVT can be installed from sources or from [PyPI](https://pypi.org/project/mvt/) (you will need some dependencies, check the [documentation](https://docs.mvt.re/en/latest/install/)):
 
 ```
 pip3 install mvt
+```
+
+You can also install MVT from PyPI with [uv](https://docs.astral.sh/uv/). First, install uv:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then install MVT as a command-line tool:
+
+```bash
+uv tool install mvt
 ```
 
 For alternative installation options and known issues, please refer to the [documentation](https://docs.mvt.re/en/latest/install/) as well as [GitHub Issues](https://github.com/mvt-project/mvt/issues).
@@ -29,7 +58,33 @@ For alternative installation options and known issues, please refer to the [docu
 
 ## Usage
 
-MVT provides two commands `mvt-ios` and `mvt-android`. [Check out the documentation to learn how to use them!](https://docs.mvt.re/)
+MVT provides three commands: `mvt-ios` and `mvt-android` analyse acquisitions from devices of that platform, and `mvt` hosts what belongs to neither: `version`, `completion`, `plugins` and `download-iocs` (`version` and `download-iocs` remain available on the platform commands for now). Running `mvt` on its own shows the installed version, update notices and the available commands. [Check out the documentation to learn how to use them!](https://docs.mvt.re/)
+
+Pass `--verbose` to any of the three commands, before the command name (`mvt-ios --verbose check-backup ...`), for debug output. The `--verbose` option the `check-*` commands accept after their name still works but is kept for compatibility only and will be removed in a future release.
+
+### Shell completion
+
+MVT can generate a shell completion script for Bash, Zsh, and Fish which covers `mvt`, `mvt-ios` and `mvt-android`:
+
+```bash
+mvt completion
+```
+
+The command prints setup instructions by default. To generate the completion script directly, pass the shell name:
+
+```bash
+mvt completion bash
+```
+
+MVT only writes completion files or shell configuration when `--install` is passed. See the [command completion documentation](https://docs.mvt.re/en/latest/command_completion/) for details.
+
+Plugin packages extend MVT with additional forensic modules, which run inside
+the `check-*` commands, and with top-level commands on `mvt`, `mvt-ios` and
+`mvt-android`. See the
+[development documentation](https://docs.mvt.re/en/latest/development/) for
+writing and installing them, and the
+[custom CLI command documentation](https://docs.mvt.re/en/latest/development/custom_commands/)
+for the entry points a package registers commands in.
 
 
 ## License

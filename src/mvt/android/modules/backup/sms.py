@@ -1,0 +1,78 @@
+# Mobile Verification Toolkit (MVT)
+# Copyright (c) 2021-2023 The MVT Authors.
+# Use of this software is governed by the MVT License 1.1 that can be found at
+#   https://license.mvt.re/1.1/
+
+import logging
+from typing import Any, Optional
+
+from mvt.android.modules.backup.base import BackupModule
+from mvt.android.parsers.backup import parse_sms_file
+from mvt.common.module_types import ModuleResults
+from mvt.common.utils import check_for_links
+
+
+class SMS(BackupModule):
+    def __init__(
+        self,
+        file_path: Optional[str] = None,
+        target_path: Optional[str] = None,
+        results_path: Optional[str] = None,
+        module_options: Optional[dict] = None,
+        log: logging.Logger = logging.getLogger(__name__),
+        results: Optional[ModuleResults] = None,
+    ) -> None:
+        super().__init__(
+            file_path=file_path,
+            target_path=target_path,
+            results_path=results_path,
+            module_options=module_options,
+            log=log,
+            results=results,
+        )
+        self.results: list[dict[str, Any]] = []
+
+    def check_indicators(self) -> None:
+        if not self.indicators:
+            return
+
+        messages = []
+        url_batches = []
+        for message in self.results:
+            if "body" not in message:
+                continue
+
+            message_links = message.get("links", [])
+            if message_links == []:
+                message_links = check_for_links(message.get("text", ""))
+
+            messages.append(message)
+            url_batches.append(message_links)
+
+        for message, ioc_match in zip(
+            messages, self.indicators.check_url_batches(url_batches)
+        ):
+            if ioc_match:
+                self.alertstore.critical(
+                    ioc_match.message, "", message, matched_indicator=ioc_match.ioc
+                )
+
+    def collect_url_results(self) -> None:
+        for message in self.results:
+            for url in message.get("links", []):
+                self.add_url_result(url, message.get("isodate"), "sms")
+
+    def run(self) -> None:
+        sms_path = "apps/com.android.providers.telephony/d_f/*_sms_backup"
+        for file in self._get_files_by_pattern(sms_path):
+            self.log.debug("Processing SMS backup file at %s", file)
+            data = self._get_file_content(file)
+            self.results.extend(parse_sms_file(data))
+
+        mms_path = "apps/com.android.providers.telephony/d_f/*_mms_backup"
+        for file in self._get_files_by_pattern(mms_path):
+            self.log.debug("Processing MMS backup file at %s", file)
+            data = self._get_file_content(file)
+            self.results.extend(parse_sms_file(data))
+
+        self.log.info("Extracted a total of %d SMS & MMS messages", len(self.results))

@@ -1,16 +1,39 @@
 # Mobile Verification Toolkit (MVT)
-# Copyright (c) 2021-2023 Claudio Guarnieri.
+# Copyright (c) 2021-2023 The MVT Authors.
 # Use of this software is governed by the MVT License 1.1 that can be found at
 #   https://license.mvt.re/1.1/
 
 import hashlib
 
-from mvt.android.parsers.backup import parse_backup_file, parse_tar_for_sms
+import pytest
+
+from mvt.android.parsers.backup import (
+    AndroidBackupParsingError,
+    parse_ab_header,
+    parse_backup_file,
+    parse_tar_for_sms,
+)
 
 from ..utils import get_artifact
 
 
 class TestBackupParsing:
+    def test_parse_incomplete_header(self):
+        assert parse_ab_header(b"ANDROID BACKUP\n") == {
+            "backup": False,
+            "compression": None,
+            "version": None,
+            "encryption": None,
+        }
+
+    def test_parse_truncated_encrypted_header(self):
+        with pytest.raises(
+            AndroidBackupParsingError, match="Invalid encrypted backup header"
+        ):
+            parse_backup_file(
+                b"ANDROID BACKUP\n5\n0\nAES-256\ntruncated", password="password"
+            )
+
     def test_parsing_noencryption(self):
         file = get_artifact("android_backup/backup.ab")
         with open(file, "rb") as f:
@@ -60,7 +83,6 @@ class TestBackupParsing:
             == "33e73df2ede9798dcb3a85c06200ee41c8f52dd2f2e50ffafcceb0407bc13e3a"
         )
         sms = parse_tar_for_sms(ddata)
-        print(sms)
         assert isinstance(sms, list)
         assert len(sms) == 1
         assert len(sms[0]["links"]) == 1

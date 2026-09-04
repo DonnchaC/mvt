@@ -1,0 +1,73 @@
+# Mobile Verification Toolkit (MVT)
+# Copyright (c) 2021-2023 The MVT Authors.
+# Use of this software is governed by the MVT License 1.1 that can be found at
+#   https://license.mvt.re/1.1/
+
+import re
+from typing import Dict, List
+
+from mvt.android.utils import warn_android_patch_level
+
+from .artifact import AndroidArtifact
+
+INTERESTING_PROPERTIES = [
+    "gsm.sim.operator.alpha",
+    "gsm.sim.operator.iso-country",
+    "persist.sys.timezone",
+    "ro.boot.serialno",
+    "ro.build.version.sdk",
+    "ro.build.version.security_patch",
+    "ro.product.cpu.abi",
+    "ro.product.locale",
+    "ro.product.vendor.manufacturer",
+    "ro.product.vendor.model",
+    "ro.product.vendor.name",
+]
+
+
+class GetProp(AndroidArtifact):
+    def parse(self, entry: str) -> None:
+        self.results: List[Dict[str, str]] = []
+        # A property value may span several lines: persist.sys.boot.reason.history
+        # prints one boot per line. Matching the whole section instead of line by
+        # line lets a value run to the first closing bracket that ends a line.
+        rxp = re.compile(
+            r"^[ \t]*\[([^]]+)\]: \[(.*?)\][ \t\r]*$",
+            re.MULTILINE | re.DOTALL,
+        )
+
+        for name, value in rxp.findall(entry):
+            self.results.append({"name": name, "value": value})
+
+    def get_device_timezone(self) -> str | None:
+        """
+        Get the device timezone from the getprop results
+
+        Used in other moduels to calculate the timezone offset
+        """
+        for entry in self.results:
+            if entry["name"] == "persist.sys.timezone":
+                return entry["value"]
+        return None
+
+    def check_indicators(self) -> None:
+        for entry in self.results:
+            if entry["name"] in INTERESTING_PROPERTIES:
+                self.log.info("%s: %s", entry["name"], entry["value"])
+
+            if entry["name"] == "ro.build.version.security_patch":
+                warning_message = warn_android_patch_level(entry["value"], self.log)
+                if isinstance(warning_message, str):
+                    self.alertstore.medium(warning_message, "", entry)
+
+        if not self.indicators:
+            return
+
+        for result in self.results:
+            ioc_match = self.indicators.check_android_property_name(
+                result.get("name", "")
+            )
+            if ioc_match:
+                self.alertstore.critical(
+                    ioc_match.message, "", result, matched_indicator=ioc_match.ioc
+                )
