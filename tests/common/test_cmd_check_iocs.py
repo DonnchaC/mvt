@@ -122,6 +122,53 @@ def test_check_iocs_rechecks_the_stored_results_of_custom_modules(
     assert "backup_only.json" not in caplog.text
 
 
+class BrokenResultsModule(MVTModule):
+    """A custom module whose check_indicators() indexes every record."""
+
+    slug = "broken_results"
+    supported_commands = (("ios", "check-iocs"),)
+
+    def run(self) -> None:
+        pass
+
+    def check_indicators(self) -> None:
+        for result in self.results:
+            self.log.info("checking %s", result["domain"])
+
+
+@pytest.mark.parametrize(
+    "broken_results",
+    ["{ this is not JSON", json.dumps([{"other_key": "example.org"}])],
+    ids=["malformed-json", "unexpected-records"],
+)
+def test_check_iocs_carries_on_after_a_broken_results_file(
+    broken_results, tmp_path, caplog
+):
+    # A results file which cannot be loaded, or which does not hold what its
+    # module expects, is reported and skipped. The other results files are
+    # still checked, as a failing module does not abort a normal run either.
+    results = [{"domain": "example.org"}]
+    (tmp_path / "broken_results.json").write_text(broken_results)
+    (tmp_path / "custom_results.json").write_text(json.dumps(results))
+    CustomResultsModule.checked.clear()
+
+    cmd = CmdCheckIOCS(
+        target_path=str(tmp_path),
+        custom_modules=[CustomResultsModule, BrokenResultsModule],
+        platform="ios",
+    )
+    cmd.modules = IOS_CHECK_IOCS_MODULES
+
+    with caplog.at_level(logging.INFO):
+        cmd.run()
+
+    assert CustomResultsModule.checked == [results]
+    assert (
+        "Error when checking the results of module BrokenResultsModule stored "
+        'in "broken_results.json"' in caplog.text
+    )
+
+
 @pytest.mark.parametrize(
     "platform, builtin_modules, listed, not_listed",
     [
